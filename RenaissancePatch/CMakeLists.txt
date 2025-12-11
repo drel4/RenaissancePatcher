@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 4.0)
-project("RenaissancePatch" C)
+project("RenaissancePatch" CXX)
 
-set (CMAKE_C_STANDARD 99)
+set (CMAKE_CXX_STANDARD 11)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-add_library(${PROJECT_NAME} SHARED dllmain.c)
+add_library(${PROJECT_NAME} SHARED dllmain.cpp)
 
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -23,7 +23,7 @@ if (MSVC)
 else ()
   message(STATUS "Building with MinGW")
   add_compile_definitions(_WIN32_WINNT_WIN2K)
-  target_link_libraries(${PROJECT_NAME} wsock32 ws2_32) 
+  target_link_libraries(${PROJECT_NAME} wsock32 ws2_32 -static -static-libgcc -static-libstdc++) 
   target_compile_options(${PROJECT_NAME} PRIVATE -municode -Wall -Wextra -Werror -O2)
 endif ()
 

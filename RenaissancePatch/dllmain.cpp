@@ -1,6 +1,6 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
-#include <stdint.h>
+
 #include <WinSock2.h>
 #include <windows.h>
 
@@ -32,7 +32,7 @@ char* WideToChar(const wchar_t* wideStr) {
     int size = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, NULL, 0, NULL, NULL);
     if (size == 0) return NULL;
 
-    char *buffer = GlobalAlloc(GMEM_ZEROINIT, size);
+    char *buffer = (char *)GlobalAlloc(GMEM_ZEROINIT, size);
     WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, buffer, size, NULL, NULL);
     return buffer;
 }
@@ -147,13 +147,14 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     UNREFERENCED_PARAMETER(lpReserved);
     switch (ul_reason_for_call)
     {
-    case DLL_PROCESS_ATTACH:
+	case DLL_PROCESS_ATTACH: {
     
         HMODULE WinSock2dll = GetModuleHandleW(L"ws2_32.dll");
         FARPROC ModuleFuncOffset = GetProcAddress(WinSock2dll, "gethostbyname");
         OriginalGethostbyname = (_gethostbyname) EnableTrampoline((PVOID)ModuleFuncOffset, (PVOID)hijackedgethostbyname);
 
         CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)(DWORD)&mainHakVzlom, NULL, 0, NULL);
+	}
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
