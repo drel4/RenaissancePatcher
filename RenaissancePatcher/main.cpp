@@ -271,7 +271,8 @@ BOOL WINAPI PatchPE(PWSTR InputFile, PWSTR OutFile) {
 
 BOOL WINAPI SetRegistryValues(VOID) {
 	HKEY Hkey;
-    if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru\\Agent", &Hkey) != ERROR_SUCCESS) return FALSE;
+
+	/*if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru\\Agent", &Hkey) != ERROR_SUCCESS) return FALSE;
     
     PCWSTR Value = L"proto.mrim.su:2041"; 
 
@@ -279,7 +280,8 @@ BOOL WINAPI SetRegistryValues(VOID) {
         RegCloseKey(Hkey);
         return FALSE;
     }
-    RegCloseKey(Hkey);
+    RegCloseKey(Hkey);*/
+
 
 	if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Renaissance", &Hkey) != ERROR_SUCCESS) return FALSE;
 
