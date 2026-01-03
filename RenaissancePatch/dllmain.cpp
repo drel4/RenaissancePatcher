@@ -7,7 +7,7 @@
 #include <tlhelp32.h>
 
 // дефайны для дефолтных значений
-#define DEFAULT_DOMAIN "mrim.su"
+#define DEFAULT_DOMAIN "proto.mrim.su"
 #define DEFAULT_AVATAR_DOMAIN "obraz.mrim.su"
 
 char* MrimProtocolDomain;
@@ -174,14 +174,15 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 
                 HMODULE WinSock2dll = GetModuleHandleW(L"ws2_32.dll");
 
-                FARPROC ModuleFuncOffset = GetProcAddress(WinSock2dll, "gethostbyname");
+                FARPROC GetHostbynameOffset = GetProcAddress(WinSock2dll, "gethostbyname");
 
-                if (!ModuleFuncOffset) {
+                if (!GetHostbynameOffset) {
                     MessageBoxW(NULL, L"В этой имплементации WinSock2 отсутствует функция gethostbyname", L"Ошибка", MB_OK | MB_ICONERROR);
                     ExitProcess(1);
                 }
 
-                OriginalGethostbyname = (_gethostbyname) EnableTrampoline((PVOID)ModuleFuncOffset, (PVOID)hijackedgethostbyname);
+                OriginalGethostbyname = (_gethostbyname) EnableTrampoline((PVOID)GetHostbynameOffset, (PVOID)hijackedgethostbyname);
+
                 mainHakVzlom();
                 break;
 	        }
