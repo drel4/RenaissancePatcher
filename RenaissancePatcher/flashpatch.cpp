@@ -1,6 +1,6 @@
 ﻿#include "flashpatch.h"
 
-CONST BYTE FlashConst[16] = {110, 219, 124, 210, 109, 174, 207, 17, 150, 184, 68, 69, 83, 84, 0, 0},
+static CONST BYTE FlashConst[16] = {110, 219, 124, 210, 109, 174, 207, 17, 150, 184, 68, 69, 83, 84, 0, 0},
     PatchedFlashConst[16] = {146, 63, 64, 234, 153, 13, 10, 70, 176, 39, 220, 101, 108, 237, 23, 81};
 
 BOOL WINAPI RegisterFlashClass(VOID) {

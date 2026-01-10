@@ -4,133 +4,35 @@
 #include "restools.h"
 #include "resources.h"
 
-#define BUTTON_1 1
+#define PATCH_BUTTON 101
+#define EXTRAS_BUTTON 102
+#define APPLY_BUTTON 103
+#define SSL_CHECKBOX 104
+#define MRA_CLEAN_BUTTON 105
+#define REN_CLEAN_BUTTON 106
+#define SERVER_TEXTBOX 107
+#define AVATAR_SERVER_TEXTBOX 108
 
-BOOL WINAPI PatchPE(PWSTR InputFile, PWSTR OutFile);
-BOOL WINAPI SetRegistryValues(VOID);
+typedef struct _ControlHandles {
+	HWND SslCheckbox;
+	HWND ServerEditBox;
+	HWND AvatarServerEditBox;
+} ControlHandles;
+
+ControlHandles ExtraDialogControls;
+
+BOOL WINAPI GetRegistryValues(VOID);
+BOOL WINAPI SetRegistryValues(BOOL IsRanFromExtras);
 BOOL WINAPI FileExists(PWSTR FilePath);
+VOID WINAPI KillRunningProcess(PWSTR FilePath);
 BOOL WINAPI MainRoutine(HWND Hwnd, PWSTR FilePath);
+LRESULT CALLBACK MainWindowProc(HWND Hwnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK ExtrasWindowProc(HWND Hwnd, UINT Msg, WPARAM wParam, LPARAM lParam);
 
-LRESULT CALLBACK WindowProc(HWND Hwnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
-    switch (Msg) {
-        case WM_DESTROY: {
-            PostQuitMessage(WM_QUIT);
-            break;
-        }
+HWND MainWindow = NULL; // workaround only needed for enabling/disabling the main window 
 
-		case WM_PAINT: {
-			PAINTSTRUCT Ps;
-			HDC DC = BeginPaint(Hwnd, &Ps);
-
-			SetBkMode(DC, TRANSPARENT);
-
-			HFONT HeadingFont = CreateFontW(
-				-MulDiv(30, GetDeviceCaps(DC, LOGPIXELSY), 72),
-				0,
-				0,
-				0,
-				FW_MEDIUM,
-				FALSE,
-				FALSE,
-				FALSE,
-				DEFAULT_CHARSET,
-				OUT_DEFAULT_PRECIS,
-				CLIP_CHARACTER_PRECIS,
-				CLEARTYPE_QUALITY,
-				DEFAULT_PITCH,
-				L"Verdana" // ΜΛΜΛ СМΘΤΡΝ Я ПΝШY КΛΚ МΛNКРΘСΘФТ
-			 ),
-
-			 BodyFont = CreateFontW(
-				-MulDiv(11, GetDeviceCaps(DC, LOGPIXELSY), 72),
-				0,
-				0,
-				0,
-				FW_NORMAL,
-				FALSE,
-				FALSE,
-				FALSE,
-				DEFAULT_CHARSET,
-				OUT_DEFAULT_PRECIS,
-				CLIP_CHARACTER_PRECIS,
-				CLEARTYPE_QUALITY,
-				DEFAULT_PITCH,
-				L"Verdana"
-			 );
-			
-			SelectObject(DC, HeadingFont);
-
-			PCWSTR Heading = L"Патчер Renaissance",
-				Body = L"Выберите вашу копию magent.exe для установки патча сервера Renaissance";
-
-			TextOutW(DC, 8, 3, Heading, wcslen(Heading));
-
-			DeleteObject(HeadingFont);
-
-			SelectObject(DC, BodyFont);
-			TextOutW(DC, 8, 60, Body, wcslen(Body));
-
-			EndPaint(Hwnd, &Ps);
-			DeleteObject(BodyFont);
-			break;
-		}
-
-		case WM_COMMAND: {
-			switch(LOWORD(wParam)) {
-				case BUTTON_1: {
-					WCHAR FilePath[MAX_PATH];
-					ZeroMemory(FilePath, sizeof(WCHAR) * MAX_PATH);
-
-					OPENFILENAMEW OpenFileName;
-					ZeroMemory(&OpenFileName, sizeof(OPENFILENAMEW));
-					OpenFileName.hwndOwner = Hwnd;
-					OpenFileName.lpstrFilter = L"Агент (magent.exe)\0magent.exe;\0Все файлы (*.*)\0*.*\0\0";
-					OpenFileName.lStructSize = sizeof(OPENFILENAMEW);
-					OpenFileName.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
-					OpenFileName.lpstrTitle = L"Выберите файл\0";
-					OpenFileName.nMaxFile = MAX_PATH;
-					OpenFileName.lpstrFile = FilePath;
-
-					if (GetOpenFileNameW(&OpenFileName)) {
-						MainRoutine(Hwnd, OpenFileName.lpstrFile);
-					}
-					break;
-				}
-			}
-			break;
-		}
-
-        default: {
-            return DefWindowProc(Hwnd, Msg, wParam, lParam);
-        }
-    }
-    return 0;
-}
-
-VOID WINAPI KillRunningProcess(PWSTR Filepath) {
-	PROCESSENTRY32W ProcEntry;
-	ProcEntry.dwSize = sizeof(PROCESSENTRY32W);
-	HANDLE ProcSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	
-	if (!ProcSnapshot) return;
-
-	if (!Process32First(ProcSnapshot, &ProcEntry)) return;
-
-	do {
-		if (_wcsicmp(PathFindFileNameW(Filepath), ProcEntry.szExeFile) == 0) {
-			HANDLE Process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, ProcEntry.th32ProcessID);
-
-			if (!Process) {
-				CloseHandle(Process);
-				return;
-			}
-
-			TerminateProcess(Process, 0);
-			CloseHandle(Process);
-		}
-	} while (Process32NextW(ProcSnapshot, &ProcEntry));
-	CloseHandle(ProcSnapshot);
-}
+PCWSTR MainClassName = L"Renaissance001", //source engine nerds should guess the reference :D
+	ExtrasClassName = L"Renaissance002"; 
 
 INT WINAPI WinMain(HINSTANCE Instance, HINSTANCE OldInst, LPSTR CmdLine, INT CmdShow) {
 	UNREFERENCED_PARAMETER(OldInst);
@@ -145,28 +47,36 @@ INT WINAPI WinMain(HINSTANCE Instance, HINSTANCE OldInst, LPSTR CmdLine, INT Cmd
 		return 0;
 	}
 
-    PCWSTR ClassName = L"Renaissance001"; //source engine nerds should guess the reference :D
+    WNDCLASSW MainWndClass;
+	ZeroMemory(&MainWndClass, sizeof(WNDCLASSW));
 
-    WNDCLASSW WndClass;
-	ZeroMemory(&WndClass, sizeof(WNDCLASSW));
+    MainWndClass.hInstance = Instance;
+    MainWndClass.hCursor = LoadCursorW(Instance, IDC_ARROW);
+    MainWndClass.hbrBackground = CreatePatternBrush((HBITMAP)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDB_BITMAP1), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+    MainWndClass.hIcon = LoadIconW(Instance, MAKEINTRESOURCEW(IDI_ICON1));
+    MainWndClass.lpszClassName = MainClassName;
+    MainWndClass.lpfnWndProc = MainWindowProc;
+    MainWndClass.style = 0;
 
-    WndClass.hInstance = Instance;
-    WndClass.hCursor = LoadCursorW(Instance, IDC_ARROW);
-    WndClass.hbrBackground = (HBRUSH)COLOR_WINDOW;
-    WndClass.hIcon = LoadIconW(Instance, MAKEINTRESOURCEW(IDI_ICON1));
-    WndClass.lpszClassName = ClassName;
-    WndClass.lpfnWndProc = WindowProc;
-    WndClass.style = 0;
+    RegisterClass(&MainWndClass);
 
-    RegisterClass(&WndClass);
+	WNDCLASSW ExtrasWndClass;
+	ZeroMemory(&ExtrasWndClass, sizeof(WNDCLASSW));
 
-    HWND Wnd = CreateWindowW(ClassName, L"Renaissance Patcher", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 640, 200, NULL, NULL, Instance, NULL),
-		PatchButton = CreateWindowW(L"BUTTON", L"Пропатчить", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 520, 131, 100, 30, Wnd, (HMENU)BUTTON_1, (HINSTANCE)GetWindowLongPtr(Wnd, GWLP_HINSTANCE), NULL);
+    ExtrasWndClass.hInstance = Instance;
+    ExtrasWndClass.hCursor = LoadCursorW(Instance, IDC_ARROW);
+    ExtrasWndClass.hbrBackground = (HBRUSH)GetSysColorBrush(COLOR_3DFACE);
+    ExtrasWndClass.hIcon = LoadIconW(Instance, MAKEINTRESOURCEW(IDI_ICON1));
+    ExtrasWndClass.lpszClassName = ExtrasClassName;
+    ExtrasWndClass.lpfnWndProc = ExtrasWindowProc;
+    ExtrasWndClass.style = 0;
 
-	SendMessage(PatchButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    RegisterClass(&ExtrasWndClass);
 
-    ShowWindow(Wnd, CmdShow);
-    UpdateWindow(Wnd);
+    MainWindow = CreateWindowW(MainClassName, L"Renaissance Patcher", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 800, 230, NULL, NULL, Instance, NULL);
+	
+    ShowWindow(MainWindow, CmdShow);
+    UpdateWindow(MainWindow);
 
     MSG Msg;
 
@@ -177,99 +87,97 @@ INT WINAPI WinMain(HINSTANCE Instance, HINSTANCE OldInst, LPSTR CmdLine, INT Cmd
     return 0;
 }
 
-BOOL WINAPI PatchPE(PWSTR InputFile, PWSTR OutFile) {
-	HANDLE MagentPe = CreateFileW(InputFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+BOOL WINAPI GetRegistryValues(VOID) {
+	HKEY Hkey;
+	if (RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru\\Agent", &Hkey) != ERROR_SUCCESS)
+		return FALSE;
 
-	if (!MagentPe) return FALSE;
-
-	HANDLE FileMap = CreateFileMappingW(MagentPe, NULL, PAGE_READONLY, 0, 0, NULL);
-
-	SIZE_T PeSize = GetFileSize(MagentPe, 0);
-
-	LPVOID MapBuffer = MapViewOfFile(FileMap, FILE_MAP_READ, 0, 0, PeSize);
+	PWSTR SslData = NULL;
+	DWORD SslDataSize = 0,
+		SslDataType = 0;
 	
-	if (!MapBuffer) return FALSE;
+	if (RegQueryValueExW(Hkey, L"ssl", 0, &SslDataType, (PBYTE)SslData, &SslDataSize) == ERROR_SUCCESS) {
+		if (SslDataType == REG_SZ) {
+			SslData = (PWSTR)GlobalAlloc(GMEM_ZEROINIT, SslDataSize * sizeof(WCHAR));
 
-	PeHeaders PeHdrs;
-	PeHdrs.DosHeader = (PIMAGE_DOS_HEADER)MapBuffer;
+			if (!SslData) {
+				RegCloseKey(Hkey);
+				return FALSE;
+			}
 
-	if (PeHdrs.DosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
-		return FALSE;
+			RegQueryValueExW(Hkey, L"ssl", 0, &SslDataType, (PBYTE)SslData, &SslDataSize);
+
+			if (_wcsicmp((SslData), L"deny") != 0)
+				SendMessageW(ExtraDialogControls.SslCheckbox, BM_SETCHECK, BST_CHECKED, 0);
+			GlobalFree(SslData);
+		}
 	}
 
-	PeHdrs.Nt32 = (PIMAGE_NT_HEADERS32)((PBYTE)PeHdrs.DosHeader + PeHdrs.DosHeader->e_lfanew);
-	PeHdrs.ImportDesc = (PIMAGE_IMPORT_DESCRIPTOR) ImageRvaToVa(PeHdrs.Nt32, (PBYTE)PeHdrs.DosHeader, PeHdrs.Nt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress, NULL);
-	PeHdrs.ImageSection = IMAGE_FIRST_SECTION(PeHdrs.Nt32);
+	else 
+		SendMessageW(ExtraDialogControls.SslCheckbox, BM_SETCHECK, BST_CHECKED, 0);
 
-	if (PeHdrs.Nt32->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) {
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
+	RegCloseKey(Hkey);
+
+	if (RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Renaissance", &Hkey) != ERROR_SUCCESS)
 		return FALSE;
-	}
 
-	if (PeHdrs.Nt32->FileHeader.Characteristics & IMAGE_FILE_DLL) {
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
-		return FALSE;
-	}
-
-	PIMAGE_SECTION_HEADER NewImageSection = (PIMAGE_SECTION_HEADER) GlobalAlloc(GMEM_ZEROINIT, sizeof(IMAGE_SECTION_HEADER) * (PeHdrs.Nt32->FileHeader.NumberOfSections + 1));
-
-	if (!NewImageSection) {
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
-		return FALSE;
-	}
-
-	IMAGE_NT_HEADERS32 NewNt32;
-
-	CopyMemory(NewImageSection, PeHdrs.ImageSection, PeHdrs.Nt32->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER));
-	CopyMemory(&NewNt32, PeHdrs.Nt32, sizeof(IMAGE_NT_HEADERS32));
+	PWSTR ServerAddrData = NULL;
+	DWORD ServerAddrSize = 0,
+		ServerAddrType = 0;
 	
-	Metadata *SectionData = (Metadata *) GlobalAlloc(GMEM_ZEROINIT, (PeHdrs.Nt32->FileHeader.NumberOfSections + 1) * sizeof(Metadata));
+	if (RegQueryValueExW(Hkey, L"MrimDomain", 0, &ServerAddrType, (PBYTE)ServerAddrData, &ServerAddrSize) == ERROR_SUCCESS) {
+		if (ServerAddrType == REG_SZ) {
+			ServerAddrData = (PWSTR)GlobalAlloc(GMEM_ZEROINIT, ServerAddrSize * sizeof(WCHAR));
 
-	EnumSections(SectionData, &PeHdrs);
+			if (!ServerAddrData) {
+				RegCloseKey(Hkey);
+				return FALSE;
+			}
 
-	if (!AddImport(&PeHdrs, SectionData, &NewNt32, NewImageSection)) {
-		GlobalFree(NewImageSection);
-		GlobalFree(SectionData);
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
-		return FALSE;
+			RegQueryValueExW(Hkey, L"MrimDomain", 0, &ServerAddrType, (PBYTE)ServerAddrData, &ServerAddrSize);
+			SendMessageW(ExtraDialogControls.ServerEditBox, WM_SETTEXT, NULL, (LPARAM)ServerAddrData);
+
+			GlobalFree(ServerAddrData);
+		}
 	}
 
-	HANDLE Output = CreateFileW(OutFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	
-	if (!Output) {
-		GlobalFree(NewImageSection);
-		GlobalFree(SectionData[PeHdrs.Nt32->FileHeader.NumberOfSections].DataPointer);
-		GlobalFree(SectionData);
-		UnmapViewOfFile(MapBuffer);
-		CloseHandle(MagentPe);
-		CloseHandle(FileMap);
+	else 
+		SendMessageW(ExtraDialogControls.ServerEditBox, WM_SETTEXT, NULL, (LPARAM)DEFAULT_SERVER);
+
+	RegCloseKey(Hkey);
+
+	if (RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Renaissance", &Hkey) != ERROR_SUCCESS)
 		return FALSE;
+
+	PWSTR AvatarServerAddrData = NULL;
+	DWORD AvatarServerAddrSize = 0,
+		AvatarServerAddrType = 0;
+	
+	if (RegQueryValueExW(Hkey, L"MrimAvatarDomain", 0, &AvatarServerAddrType, (PBYTE)AvatarServerAddrData, &AvatarServerAddrSize) == ERROR_SUCCESS) {
+		if (AvatarServerAddrType == REG_SZ) {
+			AvatarServerAddrData = (PWSTR)GlobalAlloc(GMEM_ZEROINIT, AvatarServerAddrSize * sizeof(WCHAR));
+
+			if (!AvatarServerAddrData) {
+				RegCloseKey(Hkey);
+				return FALSE;
+			}
+
+			RegQueryValueExW(Hkey, L"MrimAvatarDomain", 0, &AvatarServerAddrType, (PBYTE)AvatarServerAddrData, &AvatarServerAddrSize);
+			SendMessageW(ExtraDialogControls.AvatarServerEditBox, WM_SETTEXT, NULL, (LPARAM)AvatarServerAddrData);
+
+			GlobalFree(AvatarServerAddrData);
+		}
 	}
 
-	WritePE(&PeHdrs, NewImageSection, &NewNt32, SectionData, Output);
-	
-	GlobalFree(NewImageSection);
-	GlobalFree(SectionData[PeHdrs.Nt32->FileHeader.NumberOfSections].DataPointer);
-	GlobalFree(SectionData);
-	UnmapViewOfFile(MapBuffer);
-	CloseHandle(MagentPe);
-	CloseHandle(FileMap);
-	CloseHandle(Output);
+	else 
+		SendMessageW(ExtraDialogControls.AvatarServerEditBox, WM_SETTEXT, NULL, (LPARAM)DEFAULT_AVATAR_SERVER);
+
+	RegCloseKey(Hkey);
+
 	return TRUE;
 }
 
-BOOL WINAPI SetRegistryValues(VOID) {
+BOOL WINAPI SetRegistryValues(BOOL IsRanFromExtras) {
 	HKEY Hkey;
 
 	/*if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru\\Agent", &Hkey) != ERROR_SUCCESS) return FALSE;
@@ -282,23 +190,82 @@ BOOL WINAPI SetRegistryValues(VOID) {
     }
     RegCloseKey(Hkey);*/
 
+	if (IsRanFromExtras) {
+		if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Renaissance", &Hkey) != ERROR_SUCCESS) return FALSE;
+
+		DWORD FirstTimeTmp = 0;
+
+    	RegSetValueExW(Hkey, L"FirstTime", 0, REG_DWORD, (BYTE *)&FirstTimeTmp, sizeof(FirstTimeTmp));
+
+		WCHAR UserServerAddr[MAX_ADDR_LEN],
+			UserAvatarServerAddr[MAX_ADDR_LEN];
+
+		ZeroMemory(UserServerAddr, sizeof(WCHAR) * MAX_ADDR_LEN);
+		ZeroMemory(UserAvatarServerAddr, sizeof(WCHAR) * MAX_ADDR_LEN);
+
+		GetWindowTextW(ExtraDialogControls.ServerEditBox, UserServerAddr, MAX_ADDR_LEN);
+		GetWindowTextW(ExtraDialogControls.AvatarServerEditBox, UserAvatarServerAddr, MAX_ADDR_LEN);
+
+		RegSetValueExW(Hkey, L"MrimDomain", 0, REG_SZ, (BYTE*)UserServerAddr, sizeof(WCHAR) * MAX_ADDR_LEN);
+    	RegSetValueExW(Hkey, L"MrimAvatarDomain", 0, REG_SZ, (BYTE*)UserAvatarServerAddr, sizeof(WCHAR) * MAX_ADDR_LEN);
+
+		RegCloseKey(Hkey);
+
+		if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru\\Agent", &Hkey) != ERROR_SUCCESS) return FALSE;
+
+		if (SendMessageW(ExtraDialogControls.SslCheckbox, BM_GETCHECK, 0, 0) == BST_UNCHECKED) {
+			PCWSTR SslValue = L"deny"; 
+
+			if (RegSetValueExW(Hkey, L"ssl", 0, REG_SZ, (PBYTE)SslValue, wcslen(SslValue) * sizeof(WCHAR)) != ERROR_SUCCESS) {
+        		RegCloseKey(Hkey);
+        		return FALSE;
+    		}
+		}
+
+		else
+			RegDeleteValueW(Hkey, L"ssl");
+
+		RegCloseKey(Hkey);
+
+    	return TRUE;
+	}
 
 	if (RegCreateKeyW(HKEY_CURRENT_USER, L"Software\\Renaissance", &Hkey) != ERROR_SUCCESS) return FALSE;
 
-	//rn it sets default values. Option to change them is WIP
-
 	DWORD FirstTimeTmp = 0;
 
-	PCWSTR DefaultDomain = L"proto.mrim.su",
-		DefaultAvatarDomain = L"obraz.mrim.su";
-
     RegSetValueExW(Hkey, L"FirstTime", 0, REG_DWORD, (BYTE *)&FirstTimeTmp, sizeof(FirstTimeTmp));
-    RegSetValueExW(Hkey, L"MrimDomain", 0, REG_SZ, (BYTE*)DefaultDomain, sizeof(WCHAR) * wcslen(DefaultDomain));
-    RegSetValueExW(Hkey, L"MrimAvatarDomain", 0, REG_SZ, (BYTE*)DefaultAvatarDomain, sizeof(WCHAR) * wcslen(DefaultAvatarDomain));
+    RegSetValueExW(Hkey, L"MrimDomain", 0, REG_SZ, (BYTE*)DEFAULT_SERVER, sizeof(WCHAR) * wcslen(DEFAULT_SERVER));
+    RegSetValueExW(Hkey, L"MrimAvatarDomain", 0, REG_SZ, (BYTE*)DEFAULT_AVATAR_SERVER, sizeof(WCHAR) * wcslen(DEFAULT_AVATAR_SERVER));
 
 	RegCloseKey(Hkey);
 
     return TRUE;
+}
+
+VOID WINAPI KillRunningProcess(PWSTR FilePath) {
+	PROCESSENTRY32W ProcEntry;
+	ProcEntry.dwSize = sizeof(PROCESSENTRY32W);
+	HANDLE ProcSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	
+	if (!ProcSnapshot) return;
+
+	if (!Process32First(ProcSnapshot, &ProcEntry)) return;
+
+	do {
+		if (_wcsicmp(PathFindFileNameW(FilePath), ProcEntry.szExeFile) == 0) {
+			HANDLE Process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, ProcEntry.th32ProcessID);
+
+			if (!Process) {
+				CloseHandle(Process);
+				return;
+			}
+
+			TerminateProcess(Process, 0);
+			CloseHandle(Process);
+		}
+	} while (Process32NextW(ProcSnapshot, &ProcEntry));
+	CloseHandle(ProcSnapshot);
 }
 
 BOOL WINAPI FileExists(PWSTR FilePath) {
@@ -325,7 +292,15 @@ BOOL WINAPI MainRoutine(HWND Hwnd, PWSTR FilePath) {
 
 	wcscpy(DestPath, OrigPath);
 
-	PWSTR TmpFilePath = wcscat(OrigPath, L"\\magent.exe.tmp\0");
+	WCHAR BakPath[MAX_PATH];
+	ZeroMemory(BakPath, sizeof(WCHAR) * MAX_PATH);
+
+	wcscpy(BakPath, OrigPath);
+
+	wcscat(BakPath, L"\\magent.bak");
+
+	CopyFileW(FilePath, BakPath, FALSE);
+	PWSTR TmpFilePath = wcscat(OrigPath, L"\\magent.exe.tmp");
 
 	if (PatchPE(FilePath, TmpFilePath)) {
 		BOOL FlashStatus = PatchFlash(TmpFilePath);
@@ -347,7 +322,7 @@ BOOL WINAPI MainRoutine(HWND Hwnd, PWSTR FilePath) {
 		for (DWORD a = 0; a < 2; a++)
 			ExtractRes(DestPath, DllNames[a], ResIds[a], RT_RCDATA);
 
-		if (!SetRegistryValues())
+		if (!SetRegistryValues(FALSE))
 			MessageBoxW(
 				Hwnd, 
 				L"Не удалось задать значение HKCU\\Software\\Mail.ru\\Agent | strict_server. Необходимо ввести значение proto.mrim.su:2041", 
@@ -382,4 +357,191 @@ BOOL WINAPI MainRoutine(HWND Hwnd, PWSTR FilePath) {
 			return FALSE;
 		}
 	return TRUE;
+}
+
+LRESULT CALLBACK MainWindowProc(HWND Hwnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
+    switch (Msg) {
+        case WM_DESTROY: {
+            PostQuitMessage(WM_QUIT);
+            break;
+        }
+
+		case WM_CREATE: {
+			HWND PatchButton = CreateWindowW(L"BUTTON", L"Пропатчить", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 680, 161, 100, 30, Hwnd, (HMENU)PATCH_BUTTON, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL),
+				WorkaroundsButton = CreateWindowW(L"BUTTON", L"Дополнительно", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 570, 161, 100, 30, Hwnd, (HMENU)EXTRAS_BUTTON, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);
+
+			SendMessage(PatchButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			SendMessage(WorkaroundsButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			break;
+		}
+
+		case WM_PAINT: {
+			PAINTSTRUCT Ps;
+			HDC DC = BeginPaint(Hwnd, &Ps);
+
+			SetBkMode(DC, TRANSPARENT);
+
+			HFONT BodyFont = CreateFontW(
+				-MulDiv(9, GetDeviceCaps(DC, LOGPIXELSY), 72),
+				0,
+				0,
+				0,
+				FW_NORMAL,
+				FALSE,
+				FALSE,
+				FALSE,
+				DEFAULT_CHARSET,
+				OUT_DEFAULT_PRECIS,
+				CLIP_CHARACTER_PRECIS,
+				CLEARTYPE_QUALITY,
+				DEFAULT_PITCH,
+				L"Verdana" // ΜΛΜΛ СМΘΤΡΝ Я ПΝШY КΛΚ МΛNКРΘСΘФТ
+			 );
+			
+			PCWSTR Body = L"Выберите вашу копию magent.exe для установки патча сервера Renaissance";
+
+			SelectObject(DC, BodyFont);
+			TextOutW(DC, 8, 126, Body, wcslen(Body));
+
+			EndPaint(Hwnd, &Ps);
+			DeleteObject(BodyFont);
+			break;
+		}
+
+		case WM_COMMAND: {
+			switch(LOWORD(wParam)) {
+				case PATCH_BUTTON: {
+					WCHAR FilePath[MAX_PATH];
+					ZeroMemory(FilePath, sizeof(WCHAR) * MAX_PATH);
+
+					OPENFILENAMEW OpenFileName;
+					ZeroMemory(&OpenFileName, sizeof(OPENFILENAMEW));
+					OpenFileName.hwndOwner = Hwnd;
+					OpenFileName.lpstrFilter = L"Агент (magent.exe)\0magent.exe;\0Все файлы (*.*)\0*.*\0\0";
+					OpenFileName.lStructSize = sizeof(OPENFILENAMEW);
+					OpenFileName.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+					OpenFileName.lpstrTitle = L"Выберите файл\0";
+					OpenFileName.nMaxFile = MAX_PATH;
+					OpenFileName.lpstrFile = FilePath;
+
+					if (GetOpenFileNameW(&OpenFileName)) {
+						MainRoutine(Hwnd, OpenFileName.lpstrFile);
+					}
+					break;
+				}
+
+				case EXTRAS_BUTTON: {
+					HWND ExtraWnd = CreateWindowW(ExtrasClassName, L"Дополнительно", WS_OVERLAPPED | WS_VISIBLE | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 200, 240, Hwnd, NULL, GetModuleHandleW(NULL), NULL);
+					EnableWindow(Hwnd, FALSE);
+    				UpdateWindow(ExtraWnd);
+					break;
+				}
+			}
+			break;
+		}
+
+        default: {
+            return DefWindowProc(Hwnd, Msg, wParam, lParam);
+        }
+    }
+    return 0;
+}
+
+LRESULT CALLBACK ExtrasWindowProc(HWND Hwnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
+    switch (Msg) {
+		case WM_CREATE: {
+			HWND ApplyButton = CreateWindowW(L"BUTTON", L"Применить", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 50, 180, 95, 20, Hwnd, (HMENU)APPLY_BUTTON, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL),
+				CleanMraButton = CreateWindowW(L"BUTTON", L"Очистить", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 130, 20, 55, 20, Hwnd, (HMENU)MRA_CLEAN_BUTTON, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL),
+				CleanRenButton = CreateWindowW(L"BUTTON", L"Очистить", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 130, 50, 55, 20, Hwnd, (HMENU)REN_CLEAN_BUTTON, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);
+			
+			HWND CleanMraCaption = CreateWindowW(L"STATIC", L"Очистить Agent", WS_VISIBLE | WS_CHILD, 10, 20, 60, 30, Hwnd, NULL, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL),
+				CleanRenCaption = CreateWindowW(L"STATIC", L"Очистить Renaissance", WS_VISIBLE | WS_CHILD, 10, 50, 65, 30, Hwnd, NULL, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);
+			
+			ExtraDialogControls.SslCheckbox = CreateWindowW(L"BUTTON", L"Включить SSL", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 10, 78, 90, 20, Hwnd, (HMENU)SSL_CHECKBOX, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);
+
+			ExtraDialogControls.ServerEditBox = CreateWindowW(L"EDIT", DEFAULT_SERVER, WS_TABSTOP | WS_BORDER | WS_CHILD | WS_VISIBLE | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL, 10, 102, 90, 20, Hwnd, (HMENU)SERVER_TEXTBOX, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);
+			ExtraDialogControls.AvatarServerEditBox = CreateWindowW(L"EDIT", DEFAULT_AVATAR_SERVER, WS_TABSTOP | WS_BORDER | WS_CHILD | WS_VISIBLE | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL, 10, 125, 90, 20, Hwnd, (HMENU)AVATAR_SERVER_TEXTBOX, (HINSTANCE)GetWindowLongPtr(Hwnd, GWLP_HINSTANCE), NULL);;
+
+			SendMessage(ApplyButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			SendMessage(CleanMraButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			SendMessage(CleanRenButton, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+			SendMessage(CleanMraCaption, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			SendMessage(CleanRenCaption, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+			SendMessage(ExtraDialogControls.SslCheckbox, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+			SendMessage(ExtraDialogControls.ServerEditBox, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+			SendMessage(ExtraDialogControls.AvatarServerEditBox, WM_SETFONT, (LPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+			GetRegistryValues();
+
+			break;
+		}
+
+		case WM_COMMAND: {
+			switch (LOWORD(wParam)) {
+				case APPLY_BUTTON: {
+					if (!SetRegistryValues(TRUE)) MessageBoxW(Hwnd, L"Произошла ошибка при записи настроек в реестр.", L"Ошибка", MB_OK | MB_ICONERROR);
+					PostMessage(Hwnd, WM_CLOSE, 0, 0);
+					break;
+				}
+
+				case MRA_CLEAN_BUTTON: {
+					if (MessageBoxW(Hwnd, L"ВНИМАНИЕ! Данная операция необратимо удалит данные Агента из реестра. Она необходима лишь в крайних случаях. Убедитесь в наличии резервных копий и продолжайте на свой страх и риск.", L"Внимание, опасная операция!", MB_YESNO | MB_ICONWARNING) != IDYES)
+						break;
+
+					HKEY Hkey;
+
+					if (RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Mail.ru", &Hkey) != ERROR_SUCCESS) {
+						MessageBoxW(Hwnd, L"Раздел HKCU\\Software\\Mail.ru не существует", L"Ошибка очистки", MB_OK | MB_ICONERROR);
+						break;
+					}
+
+					if (SHDeleteKeyW(Hkey, L"Agent") == ERROR_SUCCESS)
+						MessageBoxW(Hwnd, L"Раздел HKCU\\Software\\Mail.ru\\Agent был успешно очищен!", L"Успех", MB_OK | MB_ICONINFORMATION);
+
+					else 
+						MessageBoxW(Hwnd, L"Ошибка очистки раздела реестра. Возможно у пользователя недостаточно прав или этого раздела не существует.", L"Ошибка очистки", MB_OK | MB_ICONERROR);
+
+					RegCloseKey(Hkey);
+					break;
+				}
+
+				case REN_CLEAN_BUTTON: {
+					if (MessageBoxW(Hwnd, L"ВНИМАНИЕ! Данная операция необратимо очистит настройки патча. Это приведёт к сбросу настроек сервера.", L"Внимание, опасная операция!", MB_YESNO | MB_ICONWARNING) != IDYES)
+						break;
+
+					HKEY Hkey;
+
+					if (RegOpenKeyW(HKEY_CURRENT_USER, L"Software", &Hkey) != ERROR_SUCCESS) {
+						MessageBoxW(Hwnd, L"Ошибка открытия раздела HKCU\\Software. Возможно у пользователя недостаточно прав.", L"Ошибка очистки", MB_OK | MB_ICONERROR);
+						break;
+					}
+
+					if (SHDeleteKeyW(Hkey, L"Renaissance") == ERROR_SUCCESS)
+						MessageBoxW(Hwnd, L"Раздел HKCU\\Software\\Renaissance был успешно очищен!", L"Успех", MB_OK | MB_ICONINFORMATION);
+
+					else 
+						MessageBoxW(Hwnd, L"Ошибка очистки раздела реестра. Возможно у пользователя недостаточно прав или этого раздела не существует.", L"Ошибка очистки", MB_OK | MB_ICONERROR);
+
+					RegCloseKey(Hkey);
+					break;
+				}
+			}
+			break;
+		}
+
+        case WM_CLOSE: {
+			EnableWindow(MainWindow, TRUE);
+			DestroyWindow(Hwnd);
+			SetFocus(MainWindow);
+			break;
+		}
+
+        default: {
+            return DefWindowProc(Hwnd, Msg, wParam, lParam);
+        }
+    }
+    return 0;
 }

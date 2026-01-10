@@ -1,6 +1,26 @@
 ﻿#include "peutils.h"
 
-VOID WINAPI WritePE(PeHeaders *PeHdrs, PIMAGE_SECTION_HEADER NewImportSection, PIMAGE_NT_HEADERS32 NewNt32, Metadata *SectionData, HANDLE Output) {
+#define ALIGN(n, a) (((n) + (a) - 1) & ~((a) - 1))
+
+typedef struct {
+    PIMAGE_DOS_HEADER DosHeader;
+	PIMAGE_NT_HEADERS32 Nt32;
+	PIMAGE_IMPORT_DESCRIPTOR ImportDesc;
+	PIMAGE_SECTION_HEADER ImageSection;
+} PeHeaders;
+
+typedef struct {
+    DWORD Size;
+    LPVOID DataPointer;
+    DWORD Offset;
+} Metadata;
+
+static VOID WINAPI WritePE(PeHeaders *PeHdrs, PIMAGE_SECTION_HEADER NewImportSection, PIMAGE_NT_HEADERS32 NewNt32, Metadata *SectionData, HANDLE Output);
+static BOOL WINAPI CreateNewSection(PSTR SectionName, DWORD Size, PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable);
+static VOID WINAPI EnumSections(Metadata *SectionData, PeHeaders *PeHdrs);
+static BOOL WINAPI AddImport(PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable);
+
+static VOID WINAPI WritePE(PeHeaders *PeHdrs, PIMAGE_SECTION_HEADER NewImportSection, PIMAGE_NT_HEADERS32 NewNt32, Metadata *SectionData, HANDLE Output) {
 	DWORD Written;
 
 	WriteFile(Output, PeHdrs->DosHeader, PeHdrs->DosHeader->e_lfanew, &Written, NULL);
@@ -13,7 +33,7 @@ VOID WINAPI WritePE(PeHeaders *PeHdrs, PIMAGE_SECTION_HEADER NewImportSection, P
 	}
 }
 
-BOOL WINAPI AddImport(PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable) {
+static BOOL WINAPI AddImport(PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable) {
 	CONST DWORD OldImportTableSize = PeHdr->Nt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size,
 		*OldImportTable = (PDWORD)PeHdr->ImportDesc;
 
@@ -63,7 +83,7 @@ BOOL WINAPI AddImport(PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS
 	return TRUE;
 }
 
-BOOL WINAPI CreateNewSection(PSTR SectionName, DWORD Size, PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable) {
+static BOOL WINAPI CreateNewSection(PSTR SectionName, DWORD Size, PeHeaders *PeHdr, Metadata *SectionData, PIMAGE_NT_HEADERS32 NewNt32, PIMAGE_SECTION_HEADER NewSectionTable) {
 	IMAGE_SECTION_HEADER *LastSection = &NewSectionTable[PeHdr->Nt32->FileHeader.NumberOfSections - 1];
 	IMAGE_SECTION_HEADER *NewSection = &NewSectionTable[PeHdr->Nt32->FileHeader.NumberOfSections];
 
@@ -97,10 +117,102 @@ BOOL WINAPI CreateNewSection(PSTR SectionName, DWORD Size, PeHeaders *PeHdr, Met
 	return TRUE;
 }
 
-VOID WINAPI EnumSections(Metadata *SectionData, PeHeaders *PeHdrs) {
+static VOID WINAPI EnumSections(Metadata *SectionData, PeHeaders *PeHdrs) {
 	for (WORD a = 0; a < PeHdrs->Nt32->FileHeader.NumberOfSections; a++) {
 		SectionData[a].DataPointer = (PBYTE)PeHdrs->DosHeader + PeHdrs->ImageSection[a].PointerToRawData;
 		SectionData[a].Offset = PeHdrs->ImageSection[a].PointerToRawData;
 		SectionData[a].Size = PeHdrs->ImageSection[a].SizeOfRawData;
 	}
+}
+
+BOOL WINAPI PatchPE(PWSTR InputFile, PWSTR OutFile) {
+	HANDLE MagentPe = CreateFileW(InputFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+	if (!MagentPe) return FALSE;
+
+	HANDLE FileMap = CreateFileMappingW(MagentPe, NULL, PAGE_READONLY, 0, 0, NULL);
+
+	SIZE_T PeSize = GetFileSize(MagentPe, 0);
+
+	LPVOID MapBuffer = MapViewOfFile(FileMap, FILE_MAP_READ, 0, 0, PeSize);
+	
+	if (!MapBuffer) return FALSE;
+
+	PeHeaders PeHdrs;
+	PeHdrs.DosHeader = (PIMAGE_DOS_HEADER)MapBuffer;
+
+	if (PeHdrs.DosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	PeHdrs.Nt32 = (PIMAGE_NT_HEADERS32)((PBYTE)PeHdrs.DosHeader + PeHdrs.DosHeader->e_lfanew);
+	PeHdrs.ImportDesc = (PIMAGE_IMPORT_DESCRIPTOR) ImageRvaToVa(PeHdrs.Nt32, (PBYTE)PeHdrs.DosHeader, PeHdrs.Nt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress, NULL);
+	PeHdrs.ImageSection = IMAGE_FIRST_SECTION(PeHdrs.Nt32);
+
+	if (PeHdrs.Nt32->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) {
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	if (PeHdrs.Nt32->FileHeader.Characteristics & IMAGE_FILE_DLL) {
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	PIMAGE_SECTION_HEADER NewImageSection = (PIMAGE_SECTION_HEADER) GlobalAlloc(GMEM_ZEROINIT, sizeof(IMAGE_SECTION_HEADER) * (PeHdrs.Nt32->FileHeader.NumberOfSections + 1));
+
+	if (!NewImageSection) {
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	IMAGE_NT_HEADERS32 NewNt32;
+
+	CopyMemory(NewImageSection, PeHdrs.ImageSection, PeHdrs.Nt32->FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER));
+	CopyMemory(&NewNt32, PeHdrs.Nt32, sizeof(IMAGE_NT_HEADERS32));
+	
+	Metadata *SectionData = (Metadata *) GlobalAlloc(GMEM_ZEROINIT, (PeHdrs.Nt32->FileHeader.NumberOfSections + 1) * sizeof(Metadata));
+
+	EnumSections(SectionData, &PeHdrs);
+
+	if (!AddImport(&PeHdrs, SectionData, &NewNt32, NewImageSection)) {
+		GlobalFree(NewImageSection);
+		GlobalFree(SectionData);
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	HANDLE Output = CreateFileW(OutFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	
+	if (!Output) {
+		GlobalFree(NewImageSection);
+		GlobalFree(SectionData[PeHdrs.Nt32->FileHeader.NumberOfSections].DataPointer);
+		GlobalFree(SectionData);
+		UnmapViewOfFile(MapBuffer);
+		CloseHandle(MagentPe);
+		CloseHandle(FileMap);
+		return FALSE;
+	}
+
+	WritePE(&PeHdrs, NewImageSection, &NewNt32, SectionData, Output);
+	
+	GlobalFree(NewImageSection);
+	GlobalFree(SectionData[PeHdrs.Nt32->FileHeader.NumberOfSections].DataPointer);
+	GlobalFree(SectionData);
+	UnmapViewOfFile(MapBuffer);
+	CloseHandle(MagentPe);
+	CloseHandle(FileMap);
+	CloseHandle(Output);
+	return TRUE;
 }
