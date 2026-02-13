@@ -5,6 +5,12 @@
 #include <windows.h>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <math.h>
+
+int main() {
+    sqrt(144.0);
+}
+// эта хуйня сверху нужна чтобы пофиксить ошибку с floating point support not loaded 
 
 // дефайны для дефолтных значений
 #define DEFAULT_DOMAIN "proto.mrim.su"
